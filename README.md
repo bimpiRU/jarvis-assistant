@@ -13,7 +13,7 @@
 ## Установка
 
 ```bash
-git clone https://github.com/UserBempe/jarvis-assistant.git
+git clone https://github.com/bimpiRU/jarvis-assistant.git
 cd jarvis-assistant
 pip install -r requirements.txt
 ```
