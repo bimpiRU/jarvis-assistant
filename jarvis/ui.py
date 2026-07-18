@@ -1,10 +1,18 @@
-"""Tkinter-интерфейс для Jarvis."""
+"""Tkinter-интерфейс для Jarvis с системным треем."""
 
 import tkinter as tk
 from tkinter import scrolledtext, messagebox, ttk
 import threading
 import sys
 import winsound
+
+try:
+    import pystray
+    from PIL import Image, ImageDraw
+    HAS_PYSTRAY = True
+except Exception:
+    HAS_PYSTRAY = False
+
 from .assistant import Jarvis
 from .dangerous_action import DangerousAction
 from .jarvis_phrases import JarvisPersonality
@@ -31,10 +39,79 @@ class JarvisUI:
         )
         self.jarvis.on_dangerous_action = self._on_dangerous_action
 
+        self.tray_icon = None
+        self._tray_thread = None
+        self._force_exit = False
+
         self._build_ui()
+        self._setup_tray()
         self._play_activation_sound()
         self.jarvis.greet()
         self.jarvis.start_wake_word()
+
+    @staticmethod
+    def _create_tray_image():
+        """Генерирует простую иконку для трея."""
+        width = 64
+        height = 64
+        image = Image.new("RGB", (width, height), "#0a0a0a")
+        dc = ImageDraw.Draw(image)
+        dc.ellipse([4, 4, width - 4, height - 4], outline="#00d4ff", width=4)
+        dc.text((width // 2 - 10, height // 2 - 14), "J", fill="#00d4ff", font=None)
+        return image
+
+    def _setup_tray(self):
+        """Запускает иконку в системном трее."""
+        if not HAS_PYSTRAY:
+            return
+
+        def on_show(icon, item):
+            self.root.after(0, self._show_window)
+
+        def on_exit(icon, item):
+            self._force_exit = True
+            self.root.after(0, self._exit_app)
+
+        menu = pystray.Menu(
+            pystray.MenuItem("Открыть", on_show),
+            pystray.MenuItem("Выход", on_exit),
+        )
+
+        self.tray_icon = pystray.Icon(
+            "jarvis",
+            self._create_tray_image(),
+            "Jarvis Assistant",
+            menu,
+        )
+
+        def run_tray():
+            self.tray_icon.run()
+
+        self._tray_thread = threading.Thread(target=run_tray, daemon=True)
+        self._tray_thread.start()
+
+    def _hide_window(self):
+        """Сворачивает окно в трей."""
+        self.root.withdraw()
+        if self.tray_icon:
+            self.tray_icon.notify("Джарвис продолжает слушать в фоне.", "Jarvis")
+
+    def _show_window(self):
+        """Восстанавливает окно из трея."""
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
+
+    def _exit_app(self):
+        """Полностью завершает приложение."""
+        self.jarvis.stop()
+        if self.tray_icon:
+            try:
+                self.tray_icon.stop()
+            except Exception:
+                pass
+        self.root.destroy()
+        sys.exit(0)
 
     def _build_ui(self):
         # Верхняя панель со статусом
@@ -299,9 +376,24 @@ class JarvisUI:
             bd=0,
             padx=20,
             pady=6,
-            command=self._on_close,
+            command=lambda: self._on_close(force=True),
         )
         exit_btn.pack(side=tk.LEFT, padx=5)
+
+        # Кнопка сворачивания в трей
+        tray_btn = tk.Button(
+            controls,
+            text="В трей",
+            font=("Segoe UI", 9),
+            fg="#ffffff",
+            bg="#1a1a1a",
+            relief=tk.FLAT,
+            bd=0,
+            padx=12,
+            pady=6,
+            command=self._hide_window,
+        )
+        tray_btn.pack(side=tk.LEFT, padx=5)
 
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -440,10 +532,12 @@ class JarvisUI:
             self.status_label.config(text="Система онлайн | Скажите 'Джарвис'")
             self._set_status_dot("#00ff88")
 
-    def _on_close(self):
-        self.jarvis.stop()
-        self.root.destroy()
-        sys.exit(0)
+    def _on_close(self, force=False):
+        """При закрытии окна сворачивает в трей, если не force."""
+        if force or self._force_exit:
+            self._exit_app()
+        else:
+            self._hide_window()
 
     def run(self):
         self.root.mainloop()

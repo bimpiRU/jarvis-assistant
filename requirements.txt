@@ -13,3 +13,4 @@ comtypes==1.4.16
 winshell==0.6
 pywin32==312
 cryptography==49.0.0
+pystray==0.19.5
