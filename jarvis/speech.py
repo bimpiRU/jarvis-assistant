@@ -5,6 +5,7 @@ import queue
 import time
 import wave
 import tempfile
+import json
 import numpy as np
 import sounddevice as sd
 import speech_recognition as sr
@@ -15,20 +16,53 @@ from .config import (
     LANGUAGE,
     SPEECH_RATE,
     SPEECH_VOLUME,
+    PREFERRED_VOICE_GENDER,
     ENERGY_THRESHOLD,
     PAUSE_THRESHOLD,
     SAMPLE_RATE,
     VOSK_MODEL_PATH,
+    MIC_GAIN_DB,
+    NOISE_SUPPRESSION,
 )
+from .audio_crypto import AudioCrypto
+
+
+def _apply_gain(audio: np.ndarray, gain_db: float) -> np.ndarray:
+    """Применяет цифровое усиление к аудио."""
+    if gain_db == 0:
+        return audio
+    gain = 10 ** (gain_db / 20.0)
+    amplified = audio.astype(np.float32) * gain
+    # Клиппинг с мягким ограничением
+    return np.clip(amplified, -32768, 32767).astype(np.int16)
+
+
+def _simple_noise_gate(audio: np.ndarray, threshold: float) -> np.ndarray:
+    """Простое шумоподавление: слабые сигналы приглушаются."""
+    if not NOISE_SUPPRESSION:
+        return audio
+    audio_float = audio.astype(np.float32)
+    # Амплитудная огибающая
+    window = 512
+    out = np.zeros_like(audio_float)
+    for i in range(0, len(audio_float), window):
+        block = audio_float[i : i + window]
+        rms = np.sqrt(np.mean(block**2))
+        if rms < threshold:
+            out[i : i + window] = block * 0.1
+        else:
+            out[i : i + window] = block
+    return np.clip(out, -32768, 32767).astype(np.int16)
 
 
 class Microphone:
-    """Запись с микрофона через sounddevice (не требует PyAudio)."""
+    """Запись с микрофона через sounddevice с усилением и шумоподавлением."""
 
     def __init__(self, sample_rate=SAMPLE_RATE, block_size=1024):
         self.sample_rate = sample_rate
         self.block_size = block_size
         self.audio_queue = queue.Queue()
+        self.crypto = AudioCrypto()
 
     def _callback(self, indata, frames, time_info, status):
         if status:
@@ -53,13 +87,19 @@ class Microphone:
         )
 
         with stream:
-            # Пропускаем первые 0.3 секунды для адаптации к шуму
-            adapt_blocks = int(0.3 * self.sample_rate / self.block_size)
+            # Пропускаем первые 0.5 секунд для адаптации к шуму
+            adapt_blocks = int(0.5 * self.sample_rate / self.block_size)
+            noise_floor = ENERGY_THRESHOLD
             for _ in range(adapt_blocks):
                 try:
-                    self.audio_queue.get(timeout=0.2)
+                    block = self.audio_queue.get(timeout=0.2)
+                    energy = np.sqrt(np.mean(block.astype(np.float32) ** 2))
+                    noise_floor = 0.8 * noise_floor + 0.2 * energy
                 except queue.Empty:
                     continue
+
+            # Динамический порог: чувствительнее, но с защитой от шума
+            dynamic_threshold = max(ENERGY_THRESHOLD * 0.3, noise_floor * 1.5)
 
             while True:
                 if stop_event and stop_event.is_set():
@@ -77,7 +117,7 @@ class Microphone:
                 buffer.append(block)
                 energy = np.sqrt(np.mean(block.astype(np.float32) ** 2))
 
-                if energy >= ENERGY_THRESHOLD:
+                if energy >= dynamic_threshold:
                     speech_started = True
                     silence_duration = 0.0
                 elif speech_started:
@@ -90,21 +130,42 @@ class Microphone:
 
         if not buffer:
             return None
-        return np.concatenate(buffer, axis=0)
 
-    def record_to_wav(self, timeout=5, phrase_time_limit=10, stop_event=None):
-        """Записывает речь и возвращает путь к WAV-файлу."""
+        audio = np.concatenate(buffer, axis=0)
+        # Применяем усиление и шумоподавление
+        audio = _apply_gain(audio, MIC_GAIN_DB)
+        audio = _simple_noise_gate(audio, dynamic_threshold * 0.5)
+        return audio
+
+    def record_to_secure_wav(self, timeout=5, phrase_time_limit=10, stop_event=None):
+        """Записывает речь и сохраняет в зашифрованный временный WAV-файл."""
         audio = self.record(timeout, phrase_time_limit, stop_event)
         if audio is None:
             return None
 
-        fd, path = tempfile.mkstemp(suffix=".wav")
-        with wave.open(path, "wb") as wf:
+        # Создаём WAV в памяти
+        import io
+        wav_io = io.BytesIO()
+        with wave.open(wav_io, "wb") as wf:
             wf.setnchannels(1)
             wf.setsampwidth(2)
             wf.setframerate(self.sample_rate)
             wf.writeframes(audio.tobytes())
-        return path
+        wav_bytes = wav_io.getvalue()
+
+        # Шифруем и сохраняем
+        enc_path = self.crypto.secure_tempfile(".wav")
+        self.crypto.write_encrypted(wav_bytes, enc_path)
+        return enc_path, audio
+
+    def read_secure_wav(self, enc_path):
+        """Читает зашифрованный WAV и возвращает AudioData."""
+        wav_bytes = self.crypto.read_encrypted(enc_path)
+        return sr.AudioData(wav_bytes, self.sample_rate, 2)
+
+    def cleanup(self, enc_path):
+        """Удаляет зашифрованный временный файл."""
+        self.crypto.delete(enc_path)
 
 
 class Speech:
@@ -113,16 +174,13 @@ class Speech:
     def __init__(self):
         self.microphone = Microphone()
         self.sample_rate = SAMPLE_RATE
+        self.crypto = self.microphone.crypto
 
-        # pyttsx3
+        # pyttsx3 с выбором голоса
         self.engine = pyttsx3.init()
         self.engine.setProperty("rate", SPEECH_RATE)
         self.engine.setProperty("volume", SPEECH_VOLUME)
-        voices = self.engine.getProperty("voices")
-        for voice in voices:
-            if "russian" in voice.name.lower() or "ru" in voice.id.lower():
-                self.engine.setProperty("voice", voice.id)
-                break
+        self._set_voice()
 
         # Vosk offline model
         self.vosk_model = None
@@ -138,6 +196,48 @@ class Speech:
         # Google recognizer (fallback)
         self.recognizer = sr.Recognizer()
 
+    def _set_voice(self):
+        """Выбирает голос: мужской русский > любой мужской > русский > любой."""
+        voices = self.engine.getProperty("voices")
+        if not voices:
+            return
+
+        selected = None
+        # 1. Мужской русский
+        for voice in voices:
+            name = voice.name.lower()
+            is_ru = "russian" in name or "ru" in voice.id.lower()
+            is_male = "david" in name or "pavel" in name or "male" in name or "artem" in name
+            if is_ru and is_male:
+                selected = voice.id
+                print(f"Выбран мужской русский голос: {voice.name}")
+                break
+
+        # 2. Любой мужской
+        if not selected and PREFERRED_VOICE_GENDER == "male":
+            for voice in voices:
+                name = voice.name.lower()
+                if "david" in name or "male" in name or "pavel" in name or "artem" in name:
+                    selected = voice.id
+                    print(f"Выбран мужской голос: {voice.name}")
+                    break
+
+        # 3. Русский
+        if not selected:
+            for voice in voices:
+                name = voice.name.lower()
+                if "russian" in name or "ru" in voice.id.lower():
+                    selected = voice.id
+                    print(f"Выбран русский голос: {voice.name}")
+                    break
+
+        # 4. Первый доступный
+        if not selected:
+            selected = voices[0].id
+            print(f"Выбран голос по умолчанию: {voices[0].name}")
+
+        self.engine.setProperty("voice", selected)
+
     def _model_exists(self):
         import os
         return os.path.exists(VOSK_MODEL_PATH)
@@ -150,7 +250,6 @@ class Speech:
             recognizer = KaldiRecognizer(self.vosk_model, self.sample_rate)
             recognizer.AcceptWaveform(audio_array.tobytes())
             result = recognizer.FinalResult()
-            import json
             text = json.loads(result).get("text", "").strip()
             return text if text else None
         except Exception as e:

@@ -9,6 +9,7 @@ from .config import ASSISTANT_NAME, USER_NAME
 from . import system_control as sc
 from . import autostart
 from . import kimi_integration
+from . import extras
 from .dangerous_action import DangerousAction
 from .jarvis_phrases import JarvisPersonality
 
@@ -46,6 +47,11 @@ class CommandProcessor:
             return None
 
         text = text.lower().strip()
+
+        # --- Уведомления (до приветствий, чтобы не перехватывалось) ---
+        if text.startswith("уведомление") or text.startswith("покажи уведомление"):
+            msg = text.replace("уведомление", "").replace("покажи", "").strip()
+            return extras.show_notification("Jarvis", msg or "Уведомление от Джарвиса")
 
         # --- Приветствия и базовое ---
         if any(word in text for word in ["привет", "здравствуй", "доброе утро", "добрый день"]):
@@ -133,14 +139,14 @@ class CommandProcessor:
         if any(phrase in text for phrase in ["выключи компьютер", "выключи пк", "завершение работы"]):
             return self._dangerous(
                 "Выключение компьютера",
-                "Компьютер будет выключен через 10 секунд. Подтвердите.",
+                "Компьютер будет выключен через 30 секунд. Подтвердите.",
                 sc.shutdown_pc,
             )
 
         if any(phrase in text for phrase in ["перезагрузи компьютер", "перезагрузи пк", "перезагрузка"]):
             return self._dangerous(
                 "Перезагрузка компьютера",
-                "Компьютер будет перезагружен через 10 секунд. Подтвердите.",
+                "Компьютер будет перезагружен через 30 секунд. Подтвердите.",
                 sc.restart_pc,
             )
 
@@ -153,6 +159,55 @@ class CommandProcessor:
 
         if any(phrase in text for phrase in ["отмени выключение", "отмени перезагрузку", "отмени завершение"]):
             return sc.abort_shutdown()
+
+        # --- Wi-Fi и Bluetooth ---
+        if any(phrase in text for phrase in ["wi-fi", "wifi", "вай фай", "вай-фай"]):
+            if any(word in text for word in ["включи", "вруби", "подключи"]):
+                return extras.wifi_on()
+            if any(word in text for word in ["выключи", "отключи", "выруби"]):
+                return extras.wifi_off()
+            return extras.wifi_status()
+
+        if "bluetooth" in text or "блютуз" in text or "блутуз" in text:
+            if any(word in text for word in ["включи", "вруби", "подключи"]):
+                return extras.bluetooth_on()
+            if any(word in text for word in ["выключи", "отключи", "выруби"]):
+                return extras.bluetooth_off()
+            return extras.bluetooth_status()
+
+        # --- IP-адреса ---
+        if "локальный ip" in text or "мой ip" in text or "айпи" in text:
+            return extras.local_ip()
+        if "публичный ip" in text or "внешний ip" in text:
+            return extras.public_ip()
+
+        # --- Таймеры и напоминания ---
+        timer_match = re.search(r"таймер на (\d+) (минут|минуты|минуту|секунд|секунды|секунду)", text)
+        if timer_match:
+            value = int(timer_match.group(1))
+            unit = timer_match.group(2)
+            minutes = value if "минут" in unit else max(1, value // 60)
+            return extras.set_timer(minutes)
+
+        reminder_match = re.search(r"напомни (через) (\d+) (минут|минуты|минуту|секунд|секунды|секунду)(?: (.+))?", text)
+        if reminder_match:
+            value = int(reminder_match.group(2))
+            unit = reminder_match.group(3)
+            msg = (reminder_match.group(4) or "Напоминание!").strip()
+            minutes = value if "минут" in unit else max(1, value // 60)
+            return extras.set_reminder(minutes, msg)
+
+        if "отмени таймер" in text or "сбрось таймер" in text:
+            return extras.cancel_timers()
+
+        # --- Запуск программ ---
+        launch_match = re.search(r"запусти (.+)", text)
+        if launch_match:
+            return extras.launch_program(launch_match.group(1).strip())
+
+        if text.startswith("открой "):
+            app_name = text.replace("открой ", "").strip()
+            return extras.launch_program(app_name)
 
         if any(phrase in text for phrase in ["очисти корзину", "пусти корзину", "очистить корзину"]):
             return self._dangerous(
@@ -237,7 +292,7 @@ class CommandProcessor:
             self.active = False
             return "До свидания, сэр. Выключаюсь."
 
-        return "Я вас не понял, сэр. Попробуйте переформулировать команду."
+        return JarvisPersonality.get("MISUNDERSTOOD")
 
     def confirm_pending(self):
         """Подтверждает ожидающее опасное действие."""

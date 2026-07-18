@@ -9,15 +9,18 @@ LANGUAGE = "ru-RU"
 WAKE_WORDS = ["джарвис", "jarvis", "дарвис"]
 
 # Настройки речи
-SPEECH_RATE = 180  # скорость речи (слов в минуту)
-SPEECH_VOLUME = 0.9  # громкость от 0.0 до 1.0
+SPEECH_RATE = 170       # скорость речи (слов в минуту)
+SPEECH_VOLUME = 0.95    # громкость от 0.0 до 1.0
+PREFERRED_VOICE_GENDER = "male"  # 'male' или 'female'
 
 # Настройки распознавания
-ENERGY_THRESHOLD = 300  # чувствительность микрофона
-PAUSE_THRESHOLD = 0.8   # секунды тишины перед окончанием фразы
+ENERGY_THRESHOLD = 150  # базовая чувствительность микрофона (ниже = чувствительнее)
+PAUSE_THRESHOLD = 1.0   # секунды тишины перед окончанием фразы
 TIMEOUT = 5             # секунды ожидания речи
 PHRASE_TIME_LIMIT = 10  # максимальная длительность фразы
 SAMPLE_RATE = 16000     # частота дискретизации для Vosk
+MIC_GAIN_DB = 20        # предусиление микрофона в dB
+NOISE_SUPPRESSION = True
 
 # Пути
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
