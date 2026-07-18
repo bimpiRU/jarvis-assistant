@@ -78,6 +78,9 @@ class Jarvis:
         logger.info("[Wake] Срабатывание wake word")
         activation = JarvisPersonality.get("ACTIVATION")
         self._respond(activation)
+        # Небольшая пауза, чтобы пользователь успел сделать вдох/паузу
+        # после слова "Джарвис" и перед командой.
+        time.sleep(0.4)
         self.listen_and_respond()
 
     def listen_and_respond(self, stop_event=None):

@@ -170,6 +170,40 @@ def launch_program(name):
         return f"Не удалось запустить {name}: {e}"
 
 
+def open_yandex_music():
+    """Открывает приложение Яндекс Музыка или сайт."""
+    import webbrowser
+    import shutil
+
+    # Пытаемся найти установленное приложение
+    for app_name in ["Яндекс Музыка", "Yandex Music", "YandexMusic", "yandex-music"]:
+        path = _find_program(app_name)
+        if path:
+            try:
+                if " --processStart " in path:
+                    exe, args = path.split(" --processStart ", 1)
+                    subprocess.Popen([exe, "--processStart", args], shell=False)
+                else:
+                    subprocess.Popen([path], shell=False)
+                return f"Запускаю {app_name}."
+            except Exception:
+                pass
+
+    # Пробуем URI-схему (если приложение установлено из Microsoft Store)
+    try:
+        os.system("start yandexmusic://")
+        return "Открываю Яндекс Музыку."
+    except Exception:
+        pass
+
+    # Fallback — открываем сайт
+    try:
+        webbrowser.open("https://music.yandex.ru/home")
+        return "Открываю Яндекс Музыку в браузере."
+    except Exception as e:
+        return f"Не удалось открыть Яндекс Музыку: {e}"
+
+
 # ---------- Дополнительные пентест-возможности (только информационные) ----------
 
 def local_ip():

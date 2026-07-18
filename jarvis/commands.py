@@ -114,6 +114,9 @@ class CommandProcessor:
             webbrowser.open("https://www.google.com")
             return JarvisPersonality.get("SUCCESS") + " Открываю браузер."
 
+        if any(phrase in text for phrase in ["яндекс музыку", "яндекс музыка", "включи музыку"]):
+            return extras.open_yandex_music()
+
         if any(phrase in text for phrase in ["найди", "загугли", "поищи"]):
             query = text
             for phrase in ["найди", "загугли", "поищи"]:
