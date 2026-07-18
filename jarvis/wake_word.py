@@ -44,7 +44,11 @@ class WakeWordDetector:
         return float(np.sqrt(np.mean(arr.astype(np.float32) ** 2)))
 
     def _listen_loop(self):
-        """Цикл прослушивания через blocking read."""
+        """Цикл прослушивания через streaming partial recognition.
+
+        Wake word ищется в промежуточных результатах Vosk почти в реальном времени,
+        без ожидания паузы в речи.
+        """
         logger.info("[Wake] Запуск цикла прослушивания")
 
         try:
@@ -69,55 +73,72 @@ class WakeWordDetector:
                 dynamic_threshold = max(jarvis_config.ENERGY_THRESHOLD * 0.25, noise_floor * 1.5)
                 logger.info(f"[Wake] Порог активации: {dynamic_threshold:.1f}, фон: {noise_floor:.1f}")
 
+                recognizer = None
+                if self.speech.vosk_model:
+                    recognizer = KaldiRecognizer(self.speech.vosk_model, self.sample_rate)
+
+                # Накопитель для финальной фразы, если partial не сработал
+                phrase_blocks = []
+                speech_started = False
+                silence = 0.0
+
                 while self.listening and not self.stop_event.is_set():
                     block, _ = stream.read(self.block_size)
                     self._last_audio_level = self._rms(block)
 
-                    if self._last_audio_level < dynamic_threshold:
-                        continue
-
-                    # Началась речь — собираем фразу
-                    logger.debug(f"[Wake] Звук превысил порог: {self._last_audio_level:.1f}")
-                    phrase_blocks = [block]
-                    silence = 0.0
-                    start_time = time.time()
-
-                    while silence < jarvis_config.PAUSE_THRESHOLD and time.time() - start_time < 3:
-                        if self.stop_event.is_set():
+                    block_arr = np.frombuffer(block, dtype=np.int16) if not isinstance(block, np.ndarray) else block
+                    if recognizer:
+                        recognizer.AcceptWaveform(block_arr.tobytes())
+                        partial = json.loads(recognizer.PartialResult()).get("partial", "").strip().lower()
+                        if partial and any(w in partial for w in jarvis_config.WAKE_WORDS):
+                            logger.info(f"[Wake] Распознано (partial): {partial}")
+                            if self.on_wake:
+                                self.on_wake()
                             return
-                        block, _ = stream.read(self.block_size)
-                        phrase_blocks.append(block)
-                        self._last_audio_level = self._rms(block)
-                        if self._last_audio_level < dynamic_threshold:
-                            silence += len(block) / self.sample_rate
-                        else:
-                            silence = 0
 
-                    arrays = [np.frombuffer(b, dtype=np.int16) if not isinstance(b, np.ndarray) else b for b in phrase_blocks]
-                    audio = np.concatenate(arrays, axis=0)
-                    text = self._recognize_wake(audio)
-                    if text:
-                        logger.info(f"[Wake] Распознано: {text}")
-                        if self.on_wake:
-                            self.on_wake()
-                    else:
-                        logger.debug("[Wake] Wake word не распознано")
+                    if self._last_audio_level >= dynamic_threshold:
+                        if not speech_started:
+                            speech_started = True
+                            phrase_blocks = []
+                        silence = 0.0
+                    elif speech_started:
+                        silence += len(block) / self.sample_rate
+
+                    if speech_started:
+                        phrase_blocks.append(block_arr)
+
+                    # Если речь закончилась — проверим финальный результат
+                    if speech_started and silence >= jarvis_config.PAUSE_THRESHOLD:
+                        if recognizer and phrase_blocks:
+                            arrays = [np.frombuffer(b, dtype=np.int16) if not isinstance(b, np.ndarray) else b for b in phrase_blocks]
+                            audio = np.concatenate(arrays, axis=0)
+                            text = self._recognize_wake(audio, recognizer)
+                            if text:
+                                logger.info(f"[Wake] Распознано: {text}")
+                                if self.on_wake:
+                                    self.on_wake()
+                                return
+                            logger.debug("[Wake] Wake word не распознано")
+                        speech_started = False
+                        phrase_blocks = []
+                        silence = 0.0
+                        # Сбрасываем recognizer для следующей фразы
+                        if recognizer:
+                            recognizer = KaldiRecognizer(self.speech.vosk_model, self.sample_rate)
 
         except Exception as e:
             logger.exception(f"[Wake] Ошибка в цикле прослушивания: {e}")
         finally:
             logger.info("[Wake] Цикл прослушивания завершён")
 
-    def _recognize_wake(self, audio):
-        """Распознаёт только wake words."""
-        if self._recognizer is None:
+    def _recognize_wake(self, audio, recognizer=None):
+        """Распознаёт только wake words по финальной фразе."""
+        if self.speech.vosk_model is None:
             return None
         try:
-            # Создаём свежий recognizer для каждой попытки, чтобы избежать
-            # накопления состояния от предыдущих шумов.
-            recognizer = KaldiRecognizer(self.speech.vosk_model, self.sample_rate)
-            recognizer.AcceptWaveform(audio.tobytes())
-            result = json.loads(recognizer.FinalResult())
+            rec = recognizer if recognizer else KaldiRecognizer(self.speech.vosk_model, self.sample_rate)
+            rec.AcceptWaveform(audio.tobytes())
+            result = json.loads(rec.FinalResult())
             text = result.get("text", "").strip().lower()
             logger.debug(f"[Wake] Результат Vosk: '{text}'")
             if text and any(w in text for w in jarvis_config.WAKE_WORDS):
