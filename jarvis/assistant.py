@@ -3,6 +3,8 @@
 from .speech import Speech
 from .commands import CommandProcessor
 from .wake_word import WakeWordDetector
+from .dangerous_action import DangerousAction
+from .jarvis_phrases import JarvisPersonality
 from .config import ASSISTANT_NAME, USER_NAME
 
 
@@ -16,6 +18,8 @@ class Jarvis:
         self.use_wake_word = use_wake_word
         self.on_listen = on_listen
         self.on_response = on_response
+        self.on_dangerous_action = None
+        self.on_confirmation_needed = None
         self.wake_detector = None
 
         if use_wake_word:
@@ -27,12 +31,15 @@ class Jarvis:
     def greet(self):
         mode = "офлайн-режим" if self.offline_only else "онлайн + офлайн"
         activation = "Скажите 'Джарвис' для активации." if self.use_wake_word else ""
-        greeting = f"Добро пожаловать, {USER_NAME}. {ASSISTANT_NAME} к вашим услугам. Режим: {mode}. {activation}"
+        greeting = (
+            f"Добро пожаловать, {USER_NAME}. {ASSISTANT_NAME} к вашим услугам. "
+            f"Режим: {mode}. {activation}"
+        )
         self._respond(greeting)
         return greeting
 
     def start_wake_word(self):
-        """Запускает прослушивание wake word."""
+        """Запускает фоновое прослушивание wake word."""
         if self.wake_detector:
             self.wake_detector.start()
 
@@ -43,24 +50,51 @@ class Jarvis:
 
     def _on_wake(self):
         """Callback при срабатывании wake word."""
-        self._respond("Слушаю вас, сэр.")
+        activation = JarvisPersonality.get("ACTIVATION")
+        self._respond(activation)
         self.listen_and_respond()
 
-    def listen_and_respond(self):
+    def listen_and_respond(self, stop_event=None):
         """Слушает команду и возвращает ответ."""
         if self.on_listen:
             self.on_listen("Слушаю...")
 
-        text = self.speech.listen(use_online_fallback=not self.offline_only)
+        text = self.speech.listen(use_online_fallback=not self.offline_only, stop_event=stop_event)
 
         if not text:
-            response = "Я вас не расслышал. Повторите, пожалуйста."
+            response = "Я вас не расслышал, сэр. Повторите, пожалуйста."
             self._respond(response)
             return text, response
 
-        response = self.commands.process(text)
-        self._respond(response)
-        return text, response
+        result = self.commands.process(text)
+
+        if isinstance(result, DangerousAction):
+            self._handle_dangerous_action(result)
+            return text, result
+
+        self._respond(result)
+        return text, result
+
+    def _handle_dangerous_action(self, action):
+        """Обрабатывает опасное действие, требующее подтверждения."""
+        ask = JarvisPersonality.get("CONFIRMATION_ASK")
+        message = f"{ask} {action.title}. {action.description}"
+        self._respond(message)
+
+        if self.on_dangerous_action:
+            self.on_dangerous_action(action)
+
+    def confirm_pending(self):
+        """Подтверждает ожидающее действие."""
+        result = self.commands.confirm_pending()
+        self._respond(result)
+        return result
+
+    def cancel_pending(self):
+        """Отменяет ожидающее действие."""
+        result = self.commands.cancel_pending()
+        self._respond(result)
+        return result
 
     def _respond(self, text):
         if text:

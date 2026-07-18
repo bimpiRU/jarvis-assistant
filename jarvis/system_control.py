@@ -17,20 +17,35 @@ def lock_pc():
 
 def shutdown_pc():
     """Выключает компьютер."""
-    subprocess.call("shutdown /s /t 10 /c 'Выключение по команде Джарвиса'", shell=True)
-    return "Выключаю компьютер через 10 секунд."
+    subprocess.Popen(
+        ["shutdown", "/s", "/t", "30", "/c", "Выключение по команде Джарвиса"],
+        shell=False,
+    )
+    return "Выключаю компьютер через 30 секунд. Скажите 'отмени выключение' или выполните shutdown /a."
 
 
 def restart_pc():
     """Перезагружает компьютер."""
-    subprocess.call("shutdown /r /t 10 /c 'Перезагрузка по команде Джарвиса'", shell=True)
-    return "Перезагружаю компьютер через 10 секунд."
+    subprocess.Popen(
+        ["shutdown", "/r", "/t", "30", "/c", "Перезагрузка по команде Джарвиса"],
+        shell=False,
+    )
+    return "Перезагружаю компьютер через 30 секунд. Скажите 'отмени перезагрузку' или выполните shutdown /a."
 
 
 def sleep_pc():
     """Переводит компьютер в спящий режим."""
-    subprocess.call("rundll32.exe powrprof.dll,SetSuspendState 0,1,0", shell=True)
+    subprocess.Popen(["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"], shell=False)
     return "Перевожу в спящий режим."
+
+
+def abort_shutdown():
+    """Отменяет запланированное выключение или перезагрузку."""
+    try:
+        subprocess.run(["shutdown", "/a"], check=True, capture_output=True, text=True)
+        return "Выключение отменено."
+    except subprocess.CalledProcessError:
+        return "Нет активного выключения для отмены."
 
 
 def empty_recycle_bin():

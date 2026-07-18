@@ -8,40 +8,40 @@ import re
 from .config import ASSISTANT_NAME, USER_NAME
 from . import system_control as sc
 from . import autostart
+from . import kimi_integration
+from .dangerous_action import DangerousAction
+from .jarvis_phrases import JarvisPersonality
 
 
 class CommandProcessor:
     """Анализирует текст и выполняет соответствующие действия."""
 
-    GREETINGS = [
-        f"Приветствую, {USER_NAME}.",
-        f"Здравствуйте, {USER_NAME}.",
-        f"Всегда к вашим услугам, {USER_NAME}.",
-    ]
-
-    HOW_ARE_YOU = [
-        "Системы функционируют в штатном режиме, спасибо.",
-        f"Готов к работе, {USER_NAME}.",
-        "Полностью оперативен.",
-    ]
-
-    FAREWELLS = [
-        "До свидания, сэр.",
-        "Всего доброго.",
-        "Выключаюсь.",
-    ]
-
-    JOKES = [
-        "Почему программисты путают Хэллоуин и Рождество? Потому что 31 октября равно 25 декабря.",
-        "У меня нет тела, но я отлично умею висеть в системе.",
-        "Шутка про искусственный интеллект? Я над ней ещё думаю.",
-    ]
-
     def __init__(self):
         self.active = True
+        self.pending_action = None
+
+    def _dangerous(self, title, description, callback):
+        """Создаёт опасное действие, требующее подтверждения."""
+        self.pending_action = DangerousAction(title, description, callback)
+        return self.pending_action
+
+    def _kimi_command(self, text):
+        """Извлекает запрос для Kimi из команды."""
+        prefixes = [
+            "спроси кими", "спроси у кими", "кими", "запусти кими",
+            "открой кими", "попроси кими", "напиши код", "создай код",
+            "помоги с кодом", "сделай код",
+        ]
+        query = text
+        for prefix in prefixes:
+            if query.startswith(prefix):
+                query = query[len(prefix):].strip()
+                break
+        # Если запрос начинается с "для" или "на", оставляем как есть
+        return query
 
     def process(self, text):
-        """Обрабатывает текст команды и возвращает ответ."""
+        """Обрабатывает текст команды и возвращает ответ или DangerousAction."""
         if not text:
             return None
 
@@ -49,37 +49,37 @@ class CommandProcessor:
 
         # --- Приветствия и базовое ---
         if any(word in text for word in ["привет", "здравствуй", "доброе утро", "добрый день"]):
-            return random.choice(self.GREETINGS)
+            return JarvisPersonality.get("GREETINGS")
 
-        if any(phrase in text for phrase in ["как дела", "как ты", "как себя чувствуешь"]):
-            return random.choice(self.HOW_ARE_YOU)
+        if any(phrase in text for phrase in ["как дела", "как ты", "как себя чувствуешь", "статус"]):
+            return JarvisPersonality.get("STATUS_REPORTS")
 
-        if any(phrase in text for phrase in ["кто ты", "как тебя зовут", "твое имя"]):
-            return f"Я {ASSISTANT_NAME}, ваш персональный голосовой ассистент."
+        if any(phrase in text for phrase in ["кто ты", "как тебя зовут", "твое имя", "представься"]):
+            return f"Я {ASSISTANT_NAME}, ваш персональный голосовой ассистент. Готов выполнить любую задачу, сэр."
 
         if any(phrase in text for phrase in ["сколько время", "который час", "текущее время"]):
             now = datetime.datetime.now()
-            return f"Сейчас {now.strftime('%H:%M')}"
+            return f"Сейчас {now.strftime('%H:%M')}, сэр."
 
         if any(phrase in text for phrase in ["какое сегодня число", "какая сегодня дата", "сегодняшняя дата"]):
             now = datetime.datetime.now()
-            return f"Сегодня {now.strftime('%d %B %Y года')}"
+            return f"Сегодня {now.strftime('%d %B %Y года')}, сэр."
 
-        if any(phrase in text for phrase in ["расскажи шутку", "пошути", "анекдот", "шутка"]):
-            return random.choice(self.JOKES)
+        if any(phrase in text for phrase in ["расскажи шутку", "пошути", "анекдот", "шутка", "развесели"]):
+            return JarvisPersonality.get("JOKES")
 
         # --- Открытие сайтов ---
         if "открой youtube" in text or "youtube" in text:
             webbrowser.open("https://www.youtube.com")
-            return "Открываю YouTube."
+            return JarvisPersonality.get("SUCCESS") + " Открываю YouTube."
 
         if "открой google" in text or "гугл" in text:
             webbrowser.open("https://www.google.com")
-            return "Открываю Google."
+            return JarvisPersonality.get("SUCCESS") + " Открываю Google."
 
         if "открой браузер" in text:
             webbrowser.open("https://www.google.com")
-            return "Открываю браузер."
+            return JarvisPersonality.get("SUCCESS") + " Открываю браузер."
 
         if any(phrase in text for phrase in ["найди", "загугли", "поищи"]):
             query = text
@@ -88,21 +88,21 @@ class CommandProcessor:
             query = query.strip()
             if query:
                 webbrowser.open(f"https://www.google.com/search?q={query}")
-                return f"Ищу в Google: {query}"
-            return "Что именно найти?"
+                return f"{JarvisPersonality.get('SUCCESS')} Ищу в Google: {query}"
+            return "Что именно найти, сэр?"
 
         # --- Открытие программ ---
         if "открой калькулятор" in text:
             os.system("start calc.exe")
-            return "Открываю калькулятор."
+            return JarvisPersonality.get("SUCCESS") + " Открываю калькулятор."
 
         if "открой блокнот" in text or "открой notepad" in text:
             os.system("start notepad.exe")
-            return "Открываю блокнот."
+            return JarvisPersonality.get("SUCCESS") + " Открываю блокнот."
 
         if "открой проводник" in text or "открой папку" in text:
             os.system("start explorer.exe")
-            return "Открываю проводник."
+            return JarvisPersonality.get("SUCCESS") + " Открываю проводник."
 
         if "открой рабочий стол" in text:
             return sc.open_path(os.path.join(os.path.expanduser("~"), "Desktop"))
@@ -110,36 +110,78 @@ class CommandProcessor:
         if "открой загрузки" in text:
             return sc.open_path(os.path.join(os.path.expanduser("~"), "Downloads"))
 
+        # --- Kimi интеграция ---
+        if any(phrase in text for phrase in ["открой кими", "запусти кими", "включи кими"]):
+            return kimi_integration.open_kimi_terminal()
+
+        if any(phrase in text for phrase in ["спроси кими", "спроси у кими", "попроси кими"]):
+            query = self._kimi_command(text)
+            if query:
+                return kimi_integration.open_kimi_terminal(prompt=query)
+            return "Что спросить у Kimi, сэр?"
+
+        if any(phrase in text for phrase in ["напиши код", "создай код", "помоги с кодом", "сделай код"]):
+            query = self._kimi_command(text)
+            if not query:
+                query = "напиши код"
+            return kimi_integration.open_kimi_terminal(prompt=query)
+
         # --- Системное управление ---
         if any(phrase in text for phrase in ["заблокируй компьютер", "заблокируй пк", "блокировка"]):
             return sc.lock_pc()
 
         if any(phrase in text for phrase in ["выключи компьютер", "выключи пк", "завершение работы"]):
-            return sc.shutdown_pc()
+            return self._dangerous(
+                "Выключение компьютера",
+                "Компьютер будет выключен через 10 секунд. Подтвердите.",
+                sc.shutdown_pc,
+            )
 
         if any(phrase in text for phrase in ["перезагрузи компьютер", "перезагрузи пк", "перезагрузка"]):
-            return sc.restart_pc()
+            return self._dangerous(
+                "Перезагрузка компьютера",
+                "Компьютер будет перезагружен через 10 секунд. Подтвердите.",
+                sc.restart_pc,
+            )
 
-        if any(phrase in text for phrase in ["спящий режим", "усни", "сон"]):
-            return sc.sleep_pc()
+        if any(phrase in text for phrase in ["спящий режим", "усни", "сон", "переведи в сон"]):
+            return self._dangerous(
+                "Переход в спящий режим",
+                "Компьютер будет переведён в спящий режим. Подтвердите.",
+                sc.sleep_pc,
+            )
 
-        if any(phrase in text for phrase in ["очисти корзину", "пусти корзину"]):
-            return sc.empty_recycle_bin()
+        if any(phrase in text for phrase in ["отмени выключение", "отмени перезагрузку", "отмени завершение"]):
+            return sc.abort_shutdown()
+
+        if any(phrase in text for phrase in ["очисти корзину", "пусти корзину", "очистить корзину"]):
+            return self._dangerous(
+                "Очистка корзины",
+                "Корзина будет очищена без возможности восстановления. Подтвердите.",
+                sc.empty_recycle_bin,
+            )
 
         if "скриншот" in text or "сделай снимок экрана" in text or "фото экрана" in text:
             return sc.take_screenshot()
 
-        if any(phrase in text for phrase in ["система", "загрузка системы", "процессор", "оперативка"]):
+        if any(phrase in text for phrase in ["система", "загрузка системы", "процессор", "оперативка", "ресурсы"]):
             return sc.get_system_info()
 
         if "процессы" in text or "что тормозит" in text:
             return sc.list_processes()
 
-        if text.startswith("заверши процесс") or text.startswith("закрой процесс"):
-            name = text.replace("заверши процесс", "").replace("закрой процесс", "").strip()
+        if text.startswith("заверши процесс") or text.startswith("закрой процесс") or text.startswith("убей процесс"):
+            name = text
+            for prefix in ["заверши процесс", "закрой процесс", "убей процесс"]:
+                name = name.replace(prefix, "")
+            name = name.strip()
             if name:
-                return sc.kill_process(name)
-            return "Какой процесс завершить?"
+                return self._dangerous(
+                    f"Завершение процесса '{name}'",
+                    f"Процесс {name} будет принудительно завершён. Подтвердите.",
+                    lambda n=name: sc.kill_process(n),
+                )
+            return "Какой процесс завершить, сэр?"
 
         # --- Громкость ---
         if "выключи звук" in text or "без звука" in text or "mute" in text:
@@ -149,10 +191,10 @@ class CommandProcessor:
         if match:
             return sc.set_volume(int(match.group(1)))
 
-        if any(phrase in text for phrase in ["громче", "прибавь громкость"]):
+        if any(phrase in text for phrase in ["громче", "прибавь громкость", "громче сделай"]):
             return sc.change_volume(10)
 
-        if any(phrase in text for phrase in ["тише", "убавь громкость"]):
+        if any(phrase in text for phrase in ["тише", "убавь громкость", "тише сделай"]):
             return sc.change_volume(-10)
 
         # --- Яркость ---
@@ -160,10 +202,10 @@ class CommandProcessor:
         if match:
             return sc.set_brightness(int(match.group(1)))
 
-        if any(phrase in text for phrase in ["ярче", "прибавь яркость"]):
+        if any(phrase in text for phrase in ["ярче", "прибавь яркость", "ярче сделай"]):
             return sc.change_brightness(10)
 
-        if any(phrase in text for phrase in ["тускнее", "убавь яркость"]):
+        if any(phrase in text for phrase in ["тускнее", "убавь яркость", "тускнее сделай"]):
             return sc.change_brightness(-10)
 
         # --- Мышь и клавиатура ---
@@ -178,7 +220,7 @@ class CommandProcessor:
             key = text.replace("нажми клавишу", "").replace("нажми", "").strip()
             if key:
                 return sc.press_key(key)
-            return "Какую клавишу нажать?"
+            return "Какую клавишу нажать, сэр?"
 
         # --- Автозагрузка ---
         if any(phrase in text for phrase in ["включи автозагрузку", "запускайся с компьютером", "добавь в автозагрузку"]):
@@ -188,11 +230,26 @@ class CommandProcessor:
             return autostart.disable()
 
         if "автозагрузка" in text or "автозапуск" in text:
-            return "Автозагрузка включена." if autostart.is_enabled() else "Автозагрузка отключена."
+            return "Автозагрузка включена, сэр." if autostart.is_enabled() else "Автозагрузка отключена, сэр."
 
         # --- Завершение ---
-        if any(word in text for word in ["стоп", "выключись", "пока", "до свидания", "завершить"]):
+        if any(word in text for word in ["стоп", "выключись", "пока", "до свидания", "завершить", "спасибо все"]):
             self.active = False
-            return random.choice(self.FAREWELLS)
+            return "До свидания, сэр. Выключаюсь."
 
-        return "Я вас не понял. Попробуйте переформулировать команду."
+        return "Я вас не понял, сэр. Попробуйте переформулировать команду."
+
+    def confirm_pending(self):
+        """Подтверждает ожидающее опасное действие."""
+        if not self.pending_action:
+            return "Нет действий, требующих подтверждения."
+        result = self.pending_action.execute()
+        self.pending_action = None
+        return JarvisPersonality.get("CONFIRMED") + " " + result
+
+    def cancel_pending(self):
+        """Отменяет ожидающее опасное действие."""
+        if not self.pending_action:
+            return "Нет действий для отмены."
+        self.pending_action = None
+        return JarvisPersonality.get("CANCELLED")
