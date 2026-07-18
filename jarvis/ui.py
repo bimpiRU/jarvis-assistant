@@ -1,0 +1,148 @@
+"""Tkinter-интерфейс для Jarvis."""
+
+import tkinter as tk
+from tkinter import scrolledtext
+import threading
+from .assistant import Jarvis
+
+
+class JarvisUI:
+    """Простое окно управления ассистентом."""
+
+    def __init__(self):
+        self.root = tk.Tk()
+        self.root.title("Jarvis Assistant")
+        self.root.geometry("600x500")
+        self.root.configure(bg="#0f0f0f")
+        self.root.resizable(False, False)
+
+        self.jarvis = Jarvis(
+            on_listen=self._on_listen,
+            on_response=self._on_response,
+        )
+
+        self._build_ui()
+        self.jarvis.greet()
+
+    def _build_ui(self):
+        # Заголовок
+        title = tk.Label(
+            self.root,
+            text="J.A.R.V.I.S.",
+            font=("Consolas", 28, "bold"),
+            fg="#00d4ff",
+            bg="#0f0f0f",
+        )
+        title.pack(pady=(20, 5))
+
+        subtitle = tk.Label(
+            self.root,
+            text="Just A Rather Very Intelligent System",
+            font=("Consolas", 10),
+            fg="#888888",
+            bg="#0f0f0f",
+        )
+        subtitle.pack(pady=(0, 20))
+
+        # Индикатор статуса
+        self.status_label = tk.Label(
+            self.root,
+            text="Готов к работе",
+            font=("Segoe UI", 12),
+            fg="#00d4ff",
+            bg="#0f0f0f",
+        )
+        self.status_label.pack(pady=(0, 10))
+
+        # Кнопка микрофона
+        self.mic_button = tk.Button(
+            self.root,
+            text="🎤 Удерживайте для голосовой команды",
+            font=("Segoe UI", 12, "bold"),
+            fg="#ffffff",
+            bg="#1a1a1a",
+            activebackground="#00d4ff",
+            activeforeground="#000000",
+            relief=tk.FLAT,
+            bd=0,
+            padx=20,
+            pady=12,
+            cursor="hand2",
+        )
+        self.mic_button.pack(pady=10)
+        self.mic_button.bind("<ButtonPress-1>", self._on_mic_press)
+        self.mic_button.bind("<ButtonRelease-1>", self._on_mic_release)
+
+        # История диалога
+        self.history = scrolledtext.ScrolledText(
+            self.root,
+            wrap=tk.WORD,
+            font=("Consolas", 11),
+            bg="#1a1a1a",
+            fg="#eeeeee",
+            insertbackground="#00d4ff",
+            relief=tk.FLAT,
+            padx=10,
+            pady=10,
+        )
+        self.history.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
+        self.history.insert(tk.END, "=== История диалога ===\n")
+        self.history.config(state=tk.DISABLED)
+
+        # Кнопка выхода
+        exit_btn = tk.Button(
+            self.root,
+            text="Выход",
+            font=("Segoe UI", 10),
+            fg="#ffffff",
+            bg="#330000",
+            activebackground="#ff0000",
+            relief=tk.FLAT,
+            bd=0,
+            padx=20,
+            pady=8,
+            command=self._on_close,
+        )
+        exit_btn.pack(pady=(0, 20))
+
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _add_history(self, speaker, text):
+        self.history.config(state=tk.NORMAL)
+        self.history.insert(tk.END, f"{speaker}: {text}\n")
+        self.history.see(tk.END)
+        self.history.config(state=tk.DISABLED)
+
+    def _on_listen(self, text):
+        self.root.after(0, lambda: self.status_label.config(text=text))
+
+    def _on_response(self, text):
+        self.root.after(0, lambda: self._add_history("Jarvis", text))
+        self.root.after(0, lambda: self.status_label.config(text="Готов к работе"))
+
+    def _on_mic_press(self, event=None):
+        self.status_label.config(text="Слушаю...")
+        self.mic_button.config(bg="#00d4ff", fg="#000000")
+        threading.Thread(target=self._listen_thread, daemon=True).start()
+
+    def _on_mic_release(self, event=None):
+        self.mic_button.config(bg="#1a1a1a", fg="#ffffff")
+
+    def _listen_thread(self):
+        text, response = self.jarvis.listen_and_respond()
+        if text:
+            self.root.after(0, lambda: self._add_history("Вы", text))
+        if not self.jarvis.is_active():
+            self.root.after(1000, self._on_close)
+
+    def _on_close(self):
+        self.jarvis.stop()
+        self.root.destroy()
+
+    def run(self):
+        self.root.mainloop()
+
+
+def main():
+    app = JarvisUI()
+    app.run()
