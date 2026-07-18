@@ -249,9 +249,10 @@ class Speech:
         # Google recognizer (fallback)
         self.recognizer = sr.Recognizer()
 
-    def _set_voice(self):
+    def _set_voice(self, engine=None):
         """Выбирает голос: мужской русский > любой мужской > русский > любой."""
-        voices = self.engine.getProperty("voices")
+        engine = engine or self.engine
+        voices = engine.getProperty("voices")
         if not voices:
             return
 
@@ -285,7 +286,7 @@ class Speech:
             selected = voices[0].id
             logger.info(f"Выбран голос по умолчанию: {voices[0].name}")
 
-        self.engine.setProperty("voice", selected)
+        engine.setProperty("voice", selected)
 
     def _model_exists(self):
         import os
@@ -344,15 +345,25 @@ class Speech:
         return self.microphone.get_level()
 
     def speak(self, text):
-        """Озвучивает текст в отдельном потоке."""
+        """Озвучивает текст в отдельном потоке.
+
+        pyttsx3 требует, чтобы engine инициализировался и использовался
+        в одном потоке, поэтому создаём локальный engine внутри потока.
+        """
         if not text:
             return
 
         def _speak():
             try:
-                self.engine.say(text)
-                self.engine.runAndWait()
-            except RuntimeError:
-                pass
+                logger.info(f"[TTS] Озвучка: {text[:80]}...")
+                engine = pyttsx3.init()
+                engine.setProperty("rate", jarvis_config.SPEECH_RATE)
+                engine.setProperty("volume", jarvis_config.SPEECH_VOLUME)
+                self._set_voice(engine)
+                engine.say(text)
+                engine.runAndWait()
+                logger.info("[TTS] Озвучка завершена")
+            except Exception as e:
+                logger.exception(f"[TTS] Ошибка озвучки: {e}")
 
         threading.Thread(target=_speak, daemon=True).start()
