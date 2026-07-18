@@ -114,8 +114,11 @@ class CommandProcessor:
             webbrowser.open("https://www.google.com")
             return JarvisPersonality.get("SUCCESS") + " Открываю браузер."
 
-        if any(phrase in text for phrase in ["яндекс музыку", "яндекс музыка", "включи музыку"]):
+        if any(phrase in text for phrase in ["яндекс музыку", "яндекс музыка"]):
             return extras.open_yandex_music()
+
+        if any(phrase in text for phrase in ["включи музыку", "вруби музыку", "музыку", "включи песню"]):
+            return extras.play_music()
 
         if any(phrase in text for phrase in ["найди", "загугли", "поищи"]):
             query = text
@@ -325,7 +328,42 @@ class CommandProcessor:
             self.active = False
             return "До свидания, сэр. Выключаюсь."
 
+        # --- Smart fallback: додумываем по ключевым словам ---
+        fallback = self._smart_fallback(text)
+        if fallback:
+            return fallback
+
         return JarvisPersonality.get("MISUNDERSTOOD")
+
+    def _smart_fallback(self, text):
+        """Пытается угадать намерение по ключевым словам, если команда не распознана."""
+        if any(word in text for word in ["музык", "песн", "трек", "плеер"]):
+            return extras.play_music()
+
+        if any(word in text for word in ["видео", "ютуб", "youtube", "ролик"]):
+            import webbrowser
+            webbrowser.open("https://www.youtube.com")
+            return JarvisPersonality.get("SUCCESS") + " Открываю YouTube."
+
+        if any(word in text for word in ["почта", "почту", "email", "gmail", "письмо"]):
+            import webbrowser
+            webbrowser.open("https://mail.google.com")
+            return JarvisPersonality.get("SUCCESS") + " Открываю почту."
+
+        if any(word in text for word in ["калькулятор", "посчитай", "сколько будет"]):
+            os.system("start calc.exe")
+            return JarvisPersonality.get("SUCCESS") + " Открываю калькулятор."
+
+        if any(word in text for word in ["блокнот", "заметк", "note"]):
+            os.system("start notepad.exe")
+            return JarvisPersonality.get("SUCCESS") + " Открываю блокнот."
+
+        if any(word in text for word in ["погода", "дождь", "снег", "температура"]):
+            import webbrowser
+            webbrowser.open("https://yandex.ru/pogoda")
+            return JarvisPersonality.get("SUCCESS") + " Открываю погоду."
+
+        return None
 
     def confirm_pending(self):
         """Подтверждает ожидающее опасное действие."""

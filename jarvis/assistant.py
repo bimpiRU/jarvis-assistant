@@ -83,8 +83,8 @@ class Jarvis:
         time.sleep(0.4)
         self.listen_and_respond()
 
-    def listen_and_respond(self, stop_event=None):
-        """Слушает команду и возвращает ответ."""
+    def listen_and_respond(self, stop_event=None, retry=0):
+        """Слушает команду и возвращает ответ. При нераспознавании делает одну повторную попытку."""
         logger.info("[Listen] Начало прослушивания команды")
         if self.on_listen:
             self.on_listen("Слушаю...")
@@ -93,7 +93,11 @@ class Jarvis:
 
         if not text:
             logger.info("[Listen] Текст не распознан")
-            response = "Я вас не расслышал, сэр. Повторите, пожалуйста."
+            if retry < 1:
+                logger.info("[Listen] Повторная попытка распознавания")
+                self._respond("Я вас не расслышал, сэр. Повторите, пожалуйста.")
+                return self.listen_and_respond(stop_event=stop_event, retry=retry + 1)
+            response = "Не удалось распознать команду, сэр."
             self._respond(response)
             return text, response
 

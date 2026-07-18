@@ -204,6 +204,39 @@ def open_yandex_music():
         return f"Не удалось открыть Яндекс Музыку: {e}"
 
 
+def play_music():
+    """Включает музыку: ищет установленный музыкальный плеер и запускает его.
+
+    Если не найдено ни одного приложения — fallback на Яндекс Музыку.
+    """
+    music_apps = [
+        ("Яндекс Музыка", "yandexmusic"),
+        ("Yandex Music", "yandex-music"),
+        ("Spotify", "spotify"),
+        ("VK Музыка", "vk music"),
+        ("Boom", "boom"),
+        ("Apple Music", "apple music"),
+        ("Deezer", "deezer"),
+        ("Tidal", "tidal"),
+    ]
+
+    for display_name, search_name in music_apps:
+        path = _find_program(display_name) or _find_program(search_name)
+        if path:
+            try:
+                if " --processStart " in path:
+                    exe, args = path.split(" --processStart ", 1)
+                    subprocess.Popen([exe, "--processStart", args], shell=False)
+                else:
+                    subprocess.Popen([path], shell=False)
+                return f"Включаю {display_name}."
+            except Exception:
+                pass
+
+    # Если приложений нет — открываем Яндекс Музыку в браузере
+    return open_yandex_music()
+
+
 # ---------- Дополнительные пентест-возможности (только информационные) ----------
 
 def local_ip():
