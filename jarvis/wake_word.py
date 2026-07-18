@@ -8,6 +8,7 @@ import sounddevice as sd
 from vosk import KaldiRecognizer
 
 from . import config as jarvis_config
+from .logger import logger
 
 
 class WakeWordDetector:
@@ -21,90 +22,90 @@ class WakeWordDetector:
         self.stop_event = threading.Event()
         self.sample_rate = jarvis_config.SAMPLE_RATE
         self.block_size = 1024
-        self.audio_queue = None
-        self._stream = None
-        self._recognizer = None
         self._last_audio_level = 0.0
+        self.device = speech.microphone.device
 
+        self._recognizer = None
         if self.speech.vosk_model:
-            # Создаём распознаватель, заточенный только на wake words
-            grammar = json.dumps(jarvis_config.WAKE_WORDS + ["[unk]"])
-            self._recognizer = KaldiRecognizer(self.speech.vosk_model, self.sample_rate, grammar)
-
-    def _callback(self, indata, frames, time_info, status):
-        if status:
-            print(f"[Wake] Audio status: {status}")
-        if self.audio_queue is not None:
-            self.audio_queue.put(indata.copy())
-            # Обновляем уровень звука
-            self._last_audio_level = float(np.sqrt(np.mean(indata.astype(np.float32) ** 2)))
+            try:
+                grammar = json.dumps(jarvis_config.WAKE_WORDS + ["[unk]"])
+                self._recognizer = KaldiRecognizer(self.speech.vosk_model, self.sample_rate, grammar)
+                logger.info("Wake word recognizer создан")
+            except Exception as e:
+                logger.error(f"Ошибка создания wake word recognizer: {e}")
 
     def get_audio_level(self):
         """Возвращает последний уровень звука (RMS)."""
         return self._last_audio_level
 
+    def _rms(self, block):
+        arr = np.frombuffer(block, dtype=np.int16) if not isinstance(block, np.ndarray) else block
+        return float(np.sqrt(np.mean(arr.astype(np.float32) ** 2)))
+
     def _listen_loop(self):
-        """Цикл прослушивания."""
-        self.audio_queue = Queue()
+        """Цикл прослушивания через blocking read."""
+        logger.info("[Wake] Запуск цикла прослушивания")
 
         try:
-            self._stream = sd.InputStream(
+            with sd.RawInputStream(
                 samplerate=self.sample_rate,
                 blocksize=self.block_size,
                 dtype="int16",
                 channels=1,
-                callback=self._callback,
-            )
+                device=self.device,
+            ) as stream:
+                logger.info(f"[Wake] Поток открыт, устройство={self.device}")
 
-            with self._stream:
-                # Пропускаем шум
-                for _ in range(int(0.3 * self.sample_rate / self.block_size)):
-                    try:
-                        self.audio_queue.get(timeout=0.2)
-                    except Empty:
-                        continue
+                # Адаптация к шуму
+                noise_floor = jarvis_config.ENERGY_THRESHOLD
+                adapt_blocks = int(0.5 * self.sample_rate / self.block_size)
+                for _ in range(adapt_blocks):
+                    if self.stop_event.is_set():
+                        return
+                    block, _ = stream.read(self.block_size)
+                    noise_floor = 0.9 * noise_floor + 0.1 * self._rms(block)
 
-                print("[Wake] Ожидаю слова 'Джарвис'...")
+                dynamic_threshold = max(jarvis_config.ENERGY_THRESHOLD * 0.25, noise_floor * 1.5)
+                logger.info(f"[Wake] Порог активации: {dynamic_threshold:.1f}, фон: {noise_floor:.1f}")
+
                 while self.listening and not self.stop_event.is_set():
-                    try:
-                        block = self.audio_queue.get(timeout=0.1)
-                    except Empty:
+                    block, _ = stream.read(self.block_size)
+                    self._last_audio_level = self._rms(block)
+
+                    if self._last_audio_level < dynamic_threshold:
                         continue
 
-                    # Проверяем энергию
-                    energy = np.sqrt(np.mean(block.astype(np.float32) ** 2))
-                    if energy < jarvis_config.ENERGY_THRESHOLD * 0.5:
-                        continue
-
-                    # Короткая буферизация для распознавания
-                    phrase_buffer = [block]
+                    # Началась речь — собираем фразу
+                    logger.debug(f"[Wake] Звук превысил порог: {self._last_audio_level:.1f}")
+                    phrase_blocks = [block]
                     silence = 0.0
                     start_time = time.time()
 
                     while silence < jarvis_config.PAUSE_THRESHOLD and time.time() - start_time < 3:
-                        try:
-                            block = self.audio_queue.get(timeout=0.1)
-                        except Empty:
-                            continue
-                        phrase_buffer.append(block)
-                        e = np.sqrt(np.mean(block.astype(np.float32) ** 2))
-                        if e < jarvis_config.ENERGY_THRESHOLD * 0.5:
+                        if self.stop_event.is_set():
+                            return
+                        block, _ = stream.read(self.block_size)
+                        phrase_blocks.append(block)
+                        self._last_audio_level = self._rms(block)
+                        if self._last_audio_level < dynamic_threshold:
                             silence += len(block) / self.sample_rate
                         else:
                             silence = 0
 
-                    audio = np.concatenate(phrase_buffer, axis=0)
+                    arrays = [np.frombuffer(b, dtype=np.int16) if not isinstance(b, np.ndarray) else b for b in phrase_blocks]
+                    audio = np.concatenate(arrays, axis=0)
                     text = self._recognize_wake(audio)
                     if text:
-                        print(f"[Wake] распознано: {text}")
+                        logger.info(f"[Wake] Распознано: {text}")
                         if self.on_wake:
                             self.on_wake()
+                    else:
+                        logger.debug("[Wake] Wake word не распознано")
 
         except Exception as e:
-            print(f"[Wake] Ошибка: {e}")
+            logger.exception(f"[Wake] Ошибка в цикле прослушивания: {e}")
         finally:
-            self.audio_queue = None
-            self._stream = None
+            logger.info("[Wake] Цикл прослушивания завершён")
 
     def _recognize_wake(self, audio):
         """Распознаёт только wake words."""
@@ -114,13 +115,13 @@ class WakeWordDetector:
             self._recognizer.AcceptWaveform(audio.tobytes())
             result = json.loads(self._recognizer.FinalResult())
             text = result.get("text", "").strip().lower()
-            # Проверяем частичный результат
             if not text:
                 partial = json.loads(self._recognizer.PartialResult())
                 text = partial.get("partial", "").strip().lower()
+            logger.debug(f"[Wake] Результат Vosk: '{text}'")
             return text if text and any(w in text for w in jarvis_config.WAKE_WORDS) else None
         except Exception as e:
-            print(f"[Wake] Ошибка распознавания: {e}")
+            logger.exception(f"[Wake] Ошибка распознавания: {e}")
             return None
 
     def start(self):
@@ -131,18 +132,12 @@ class WakeWordDetector:
         self.stop_event.clear()
         self.thread = threading.Thread(target=self._listen_loop, daemon=True)
         self.thread.start()
+        logger.info("[Wake] Старт wake word detector")
 
     def stop(self):
         """Останавливает прослушивание."""
         self.listening = False
         self.stop_event.set()
-        if self._stream:
-            try:
-                self._stream.stop()
-            except Exception:
-                pass
         if self.thread:
             self.thread.join(timeout=1)
-
-
-from queue import Queue, Empty
+        logger.info("[Wake] Стоп wake word detector")

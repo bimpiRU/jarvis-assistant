@@ -274,6 +274,20 @@ class JarvisUI:
         )
         cancel_btn.pack(side=tk.LEFT, padx=5)
 
+        mic_test_btn = tk.Button(
+            controls,
+            text="🎙 Проверить микрофон",
+            font=("Segoe UI", 9),
+            fg="#ffffff",
+            bg="#1a1a3a",
+            relief=tk.FLAT,
+            bd=0,
+            padx=12,
+            pady=6,
+            command=self._test_microphone,
+        )
+        mic_test_btn.pack(side=tk.LEFT, padx=5)
+
         exit_btn = tk.Button(
             controls,
             text="Выход",
@@ -371,6 +385,15 @@ class JarvisUI:
 
     def _cancel_pending(self):
         threading.Thread(target=self.jarvis.cancel_pending, daemon=True).start()
+
+    def _test_microphone(self):
+        """Запускает тест микрофона."""
+        def run_test():
+            result = self.jarvis.test_microphone(duration=5)
+            self.root.after(0, lambda: self._add_history("Jarvis", result))
+
+        self.jarvis.stop_wake_word()
+        threading.Thread(target=run_test, daemon=True).start()
 
     def _on_mic_press(self, event=None):
         self.jarvis.stop_wake_word()

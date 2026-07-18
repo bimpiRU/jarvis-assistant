@@ -1,10 +1,8 @@
 """Модуль распознавания и синтеза речи."""
 
 import threading
-import queue
 import time
 import wave
-import tempfile
 import json
 import io
 import numpy as np
@@ -15,6 +13,7 @@ from vosk import Model, KaldiRecognizer
 
 from . import config as jarvis_config
 from .audio_crypto import AudioCrypto
+from .logger import logger
 
 
 def _apply_gain(audio: np.ndarray, gain_db: float) -> np.ndarray:
@@ -49,109 +48,107 @@ def _compute_rms(audio: np.ndarray) -> float:
 
 
 class Microphone:
-    """Запись с микрофона через sounddevice с усилением, VAD и pre-buffer."""
+    """Запись с микрофона через sounddevice blocking read с усилением, VAD и pre-buffer."""
 
     def __init__(self, sample_rate=jarvis_config.SAMPLE_RATE, block_size=1024, device=None):
         self.sample_rate = sample_rate
         self.block_size = block_size
         self.device = device
-        self.audio_queue = queue.Queue()
         self.crypto = AudioCrypto()
         self._last_level = 0.0
-
-    def _callback(self, indata, frames, time_info, status):
-        if status:
-            print(f"Audio status: {status}")
-        self.audio_queue.put(indata.copy())
-        self._last_level = _compute_rms(indata)
 
     def get_level(self):
         """Возвращает последний уровень звука."""
         return self._last_level
 
+    def _read_block(self, stream):
+        """Читает блок из потока и обновляет уровень."""
+        block, _ = stream.read(self.block_size)
+        arr = np.frombuffer(block, dtype=np.int16) if not isinstance(block, np.ndarray) else block
+        self._last_level = _compute_rms(arr)
+        return arr
+
     def record(self, timeout=5, phrase_time_limit=10, stop_event=None):
         """Записывает речь с микрофона и возвращает numpy array int16."""
-        print("Слушаю...")
+        logger.info("[Mic] Начало записи")
 
-        stream = sd.InputStream(
-            samplerate=self.sample_rate,
-            blocksize=self.block_size,
-            dtype="int16",
-            channels=1,
-            callback=self._callback,
-            device=self.device,
-        )
+        try:
+            with sd.RawInputStream(
+                samplerate=self.sample_rate,
+                blocksize=self.block_size,
+                dtype="int16",
+                channels=1,
+                device=self.device,
+            ) as stream:
+                logger.info(f"[Mic] Поток открыт, устройство={self.device}")
 
-        with stream:
-            # Адаптация к шуму и предварительный буфер
-            pre_buffer = []
-            noise_floor = jarvis_config.ENERGY_THRESHOLD
-            adapt_blocks = int(0.5 * self.sample_rate / self.block_size)
+                # Адаптация к шуму и предварительный буфер
+                pre_buffer = []
+                noise_floor = jarvis_config.ENERGY_THRESHOLD
+                adapt_blocks = int(0.5 * self.sample_rate / self.block_size)
 
-            for _ in range(adapt_blocks):
-                try:
-                    block = self.audio_queue.get(timeout=0.2)
+                for _ in range(adapt_blocks):
+                    if stop_event and stop_event.is_set():
+                        return None
+                    block = self._read_block(stream)
                     pre_buffer.append(block)
+                    noise_floor = 0.9 * noise_floor + 0.1 * _compute_rms(block)
+
+                # Динамический порог: базовый + надбавка к шуму
+                dynamic_threshold = max(jarvis_config.ENERGY_THRESHOLD * 0.25, noise_floor * 1.5)
+                logger.info(f"[Mic] Порог активации: {dynamic_threshold:.1f}, фон: {noise_floor:.1f}")
+
+                # Pre-buffer для захвата начала фразы
+                max_pre_buffer = int(0.8 * self.sample_rate / self.block_size)
+                pre_buffer = pre_buffer[-max_pre_buffer:]
+
+                buffer = []
+                speech_started = False
+                silence_duration = 0.0
+                start_time = time.time()
+
+                while True:
+                    if stop_event and stop_event.is_set():
+                        return None
+
+                    block = self._read_block(stream)
                     energy = _compute_rms(block)
-                    noise_floor = 0.9 * noise_floor + 0.1 * energy
-                except queue.Empty:
-                    continue
 
-            # Динамический порог: базовый + надбавка к шуму
-            dynamic_threshold = max(jarvis_config.ENERGY_THRESHOLD * 0.25, noise_floor * 1.5)
-            print(f"[Mic] Порог активации: {dynamic_threshold:.1f}, фон: {noise_floor:.1f}")
+                    if energy >= dynamic_threshold:
+                        if not speech_started:
+                            speech_started = True
+                            buffer.extend(pre_buffer)
+                        buffer.append(block)
+                        silence_duration = 0.0
+                    elif speech_started:
+                        buffer.append(block)
+                        silence_duration += len(block) / self.sample_rate
+                        if silence_duration >= jarvis_config.PAUSE_THRESHOLD:
+                            break
+                    else:
+                        pre_buffer.append(block)
+                        if len(pre_buffer) > max_pre_buffer:
+                            pre_buffer.pop(0)
 
-            # Pre-buffer для захвата начала фразы
-            max_pre_buffer = int(0.8 * self.sample_rate / self.block_size)
-            pre_buffer = pre_buffer[-max_pre_buffer:]
+                    if time.time() - start_time > phrase_time_limit:
+                        break
 
-            buffer = []
-            speech_started = False
-            silence_duration = 0.0
-            start_time = time.time()
-
-            while True:
-                if stop_event and stop_event.is_set():
+                if time.time() - start_time > timeout and not speech_started:
+                    logger.info("[Mic] Таймаут ожидания речи")
                     return None
 
-                try:
-                    block = self.audio_queue.get(timeout=0.1)
-                except queue.Empty:
-                    if speech_started and silence_duration >= jarvis_config.PAUSE_THRESHOLD:
-                        break
-                    if time.time() - start_time > timeout and not speech_started:
-                        return None
-                    continue
-
-                energy = _compute_rms(block)
-
-                if energy >= dynamic_threshold:
-                    if not speech_started:
-                        speech_started = True
-                        # Добавляем pre-buffer, чтобы не потерять начало
-                        buffer.extend(pre_buffer)
-                    buffer.append(block)
-                    silence_duration = 0.0
-                elif speech_started:
-                    buffer.append(block)
-                    silence_duration += len(block) / self.sample_rate
-                    if silence_duration >= jarvis_config.PAUSE_THRESHOLD:
-                        break
-                else:
-                    pre_buffer.append(block)
-                    if len(pre_buffer) > max_pre_buffer:
-                        pre_buffer.pop(0)
-
-                if time.time() - start_time > phrase_time_limit:
-                    break
+        except Exception as e:
+            logger.exception(f"[Mic] Ошибка записи: {e}")
+            return None
 
         if not buffer:
+            logger.info("[Mic] Буфер пуст")
             return None
 
         audio = np.concatenate(buffer, axis=0)
-        # Применяем усиление и шумоподавление
         audio = _apply_gain(audio, jarvis_config.MIC_GAIN_DB)
         audio = _simple_noise_gate(audio, noise_floor * 2)
+        logger.info(f"[Mic] Запись завершена: {len(audio)} семплов, RMS до усиления: {_compute_rms(audio):.1f}")
         return audio
 
     def record_to_secure_wav(self, timeout=5, phrase_time_limit=10, stop_event=None):
@@ -181,6 +178,48 @@ class Microphone:
         """Удаляет зашифрованный временный файл."""
         self.crypto.delete(enc_path)
 
+    def record_raw(self, duration=5, stop_event=None):
+        """Записывает указанное время и возвращает numpy array."""
+        logger.info(f"[Mic] Запись {duration} секунд для проверки")
+        try:
+            with sd.RawInputStream(
+                samplerate=self.sample_rate,
+                blocksize=self.block_size,
+                dtype="int16",
+                channels=1,
+                device=self.device,
+            ) as stream:
+                blocks = []
+                start = time.time()
+                while time.time() - start < duration:
+                    if stop_event and stop_event.is_set():
+                        return None
+                    block, _ = stream.read(self.block_size)
+                    arr = np.frombuffer(block, dtype=np.int16)
+                    self._last_level = _compute_rms(arr)
+                    blocks.append(arr)
+                return np.concatenate(blocks, axis=0)
+        except Exception as e:
+            logger.exception(f"[Mic] Ошибка записи: {e}")
+            return None
+
+    def play_audio(self, audio):
+        """Воспроизводит numpy array аудио."""
+        try:
+            logger.info("[Mic] Воспроизведение записи")
+            with sd.RawOutputStream(
+                samplerate=self.sample_rate,
+                blocksize=self.block_size,
+                dtype="int16",
+                channels=1,
+                device=self.device,
+            ) as stream:
+                stream.write(audio.tobytes())
+            return True
+        except Exception as e:
+            logger.exception(f"[Mic] Ошибка воспроизведения: {e}")
+            return False
+
 
 class Speech:
     """Распознавание речи офлайн (Vosk) + онлайн fallback (Google), TTS через pyttsx3."""
@@ -201,11 +240,11 @@ class Speech:
         if self._model_exists():
             try:
                 self.vosk_model = Model(jarvis_config.VOSK_MODEL_PATH)
-                print("Vosk модель загружена.")
+                logger.info("Vosk модель загружена.")
             except Exception as e:
-                print(f"Не удалось загрузить Vosk модель: {e}")
+                logger.exception(f"Не удалось загрузить Vosk модель: {e}")
         else:
-            print(f"Модель Vosk не найдена: {jarvis_config.VOSK_MODEL_PATH}. Запустите download_model.py")
+            logger.warning(f"Модель Vosk не найдена: {jarvis_config.VOSK_MODEL_PATH}. Запустите download_model.py")
 
         # Google recognizer (fallback)
         self.recognizer = sr.Recognizer()
@@ -223,7 +262,7 @@ class Speech:
             is_male = any(m in name for m in ["david", "pavel", "male", "artem", "evgeny", "dmitry"])
             if is_ru and is_male:
                 selected = voice.id
-                print(f"Выбран мужской русский голос: {voice.name}")
+                logger.info(f"Выбран мужской русский голос: {voice.name}")
                 break
 
         if not selected and jarvis_config.PREFERRED_VOICE_GENDER == "male":
@@ -231,7 +270,7 @@ class Speech:
                 name = voice.name.lower()
                 if any(m in name for m in ["david", "male", "pavel", "artem"]):
                     selected = voice.id
-                    print(f"Выбран мужской голос: {voice.name}")
+                    logger.info(f"Выбран мужской голос: {voice.name}")
                     break
 
         if not selected:
@@ -239,12 +278,12 @@ class Speech:
                 name = voice.name.lower()
                 if "russian" in name or "ru" in voice.id.lower():
                     selected = voice.id
-                    print(f"Выбран русский голос: {voice.name}")
+                    logger.info(f"Выбран русский голос: {voice.name}")
                     break
 
         if not selected:
             selected = voices[0].id
-            print(f"Выбран голос по умолчанию: {voices[0].name}")
+            logger.info(f"Выбран голос по умолчанию: {voices[0].name}")
 
         self.engine.setProperty("voice", selected)
 
@@ -261,9 +300,10 @@ class Speech:
             recognizer.AcceptWaveform(audio_array.tobytes())
             result = recognizer.FinalResult()
             text = json.loads(result).get("text", "").strip()
+            logger.debug(f"[Vosk] результат: '{text}'")
             return text if text else None
         except Exception as e:
-            print(f"Ошибка Vosk: {e}")
+            logger.exception(f"Ошибка Vosk: {e}")
             return None
 
     def _recognize_google(self, audio_array):
@@ -272,7 +312,7 @@ class Speech:
             audio_data = sr.AudioData(audio_array.tobytes(), self.sample_rate, 2)
             return self.recognizer.recognize_google(audio_data, language=jarvis_config.LANGUAGE).lower()
         except Exception as e:
-            print(f"Ошибка Google Speech: {e}")
+            logger.debug(f"Ошибка Google Speech: {e}")
             return None
 
     def listen(self, use_online_fallback=True, stop_event=None):
@@ -283,14 +323,14 @@ class Speech:
 
         text = self._recognize_vosk(audio)
         if text:
-            print(f"[Vosk] Распознано: {text}")
+            logger.info(f"[Vosk] Распознано: {text}")
             return text.lower()
 
         if use_online_fallback:
-            print("Vosk не распознал, пробую Google...")
+            logger.info("Vosk не распознал, пробую Google...")
             text = self._recognize_google(audio)
             if text:
-                print(f"[Google] Распознано: {text}")
+                logger.info(f"[Google] Распознано: {text}")
                 return text.lower()
 
         return None

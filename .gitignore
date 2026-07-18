@@ -26,3 +26,5 @@ venv/
 .vscode/
 *.log
 models/
+test_recording.wav
+best_mic_test.wav

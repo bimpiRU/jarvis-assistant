@@ -219,6 +219,9 @@ class CommandProcessor:
         if "скриншот" in text or "сделай снимок экрана" in text or "фото экрана" in text:
             return sc.take_screenshot()
 
+        if any(phrase in text for phrase in ["проверь микрофон", "тест микрофона", "проверка микрофона", "запиши и воспроизведи"]):
+            return self._mic_test_callback() if hasattr(self, "_mic_test_callback") else "Функция проверки не подключена."
+
         if any(phrase in text for phrase in ["система", "загрузка системы", "процессор", "оперативка", "ресурсы"]):
             return sc.get_system_info()
 
