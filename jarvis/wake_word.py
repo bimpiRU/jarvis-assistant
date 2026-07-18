@@ -93,7 +93,10 @@ class WakeWordDetector:
                         if partial and any(w in partial for w in jarvis_config.WAKE_WORDS):
                             logger.info(f"[Wake] Распознано (partial): {partial}")
                             if self.on_wake:
-                                self.on_wake()
+                                # Запускаем обработку в отдельном потоке, чтобы текущий
+                                # цикл wake detector мог завершиться и освободить микрофон
+                                # до того, как listener попытается его занять.
+                                threading.Thread(target=self.on_wake, daemon=True).start()
                             return
 
                     if self._last_audio_level >= dynamic_threshold:
@@ -116,7 +119,7 @@ class WakeWordDetector:
                             if text:
                                 logger.info(f"[Wake] Распознано: {text}")
                                 if self.on_wake:
-                                    self.on_wake()
+                                    threading.Thread(target=self.on_wake, daemon=True).start()
                                 return
                             logger.debug("[Wake] Wake word не распознано")
                         speech_started = False
@@ -129,6 +132,7 @@ class WakeWordDetector:
         except Exception as e:
             logger.exception(f"[Wake] Ошибка в цикле прослушивания: {e}")
         finally:
+            self.listening = False
             logger.info("[Wake] Цикл прослушивания завершён")
 
     def _recognize_wake(self, audio, recognizer=None):
