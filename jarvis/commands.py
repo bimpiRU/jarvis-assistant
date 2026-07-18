@@ -10,6 +10,7 @@ from . import system_control as sc
 from . import autostart
 from . import kimi_integration
 from . import extras
+from . import kaw_integration
 from .dangerous_action import DangerousAction
 from .jarvis_phrases import JarvisPersonality
 
@@ -52,6 +53,32 @@ class CommandProcessor:
         if text.startswith("уведомление") or text.startswith("покажи уведомление"):
             msg = text.replace("уведомление", "").replace("покажи", "").strip()
             return extras.show_notification("Jarvis", msg or "Уведомление от Джарвиса")
+
+        # --- Kimi Approve Watch (до базовых команд, чтобы точно перехватить) ---
+        if kaw_integration.is_installed():
+            if any(phrase in text for phrase in ["запусти watcher", "запусти кав", "запусти наблюдатель", "включи watcher"]):
+                return kaw_integration.start_kaw()
+
+            if any(phrase in text for phrase in ["останови watcher", "останови кав", "выключи watcher"]):
+                return kaw_integration.stop_kaw()
+
+            if any(phrase in text for phrase in ["статус watcher", "статус кав", "как watcher"]):
+                return kaw_integration.status_kaw()
+
+            if any(phrase in text for phrase in ["включи стабилизатор", "вруби стабилизатор"]):
+                return kaw_integration.enable_stabilizer()
+
+            if any(phrase in text for phrase in ["выключи стабилизатор", "отключи стабилизатор"]):
+                return kaw_integration.disable_stabilizer()
+
+            if any(phrase in text for phrase in ["включи автозагрузку кав", "автозагрузка кав", "запускай кав с компьютером"]):
+                return kaw_integration.enable_autostart()
+
+            if any(phrase in text for phrase in ["выключи автозагрузку кав", "убери кав из автозагрузки"]):
+                return kaw_integration.disable_autostart()
+
+            if "автозагрузка кав" in text:
+                return "Автозагрузка KAW включена." if kaw_integration.is_autostart_enabled() else "Автозагрузка KAW отключена."
 
         # --- Приветствия и базовое ---
         if any(word in text for word in ["привет", "здравствуй", "доброе утро", "добрый день"]):
