@@ -28,9 +28,10 @@ class WakeWordDetector:
         self._recognizer = None
         if self.speech.vosk_model:
             try:
-                grammar = json.dumps(jarvis_config.WAKE_WORDS + ["[unk]"])
-                self._recognizer = KaldiRecognizer(self.speech.vosk_model, self.sample_rate, grammar)
-                logger.info("Wake word recognizer создан")
+                # Используем recognizer без grammar — small-ru модель лучше распознаёт
+                # короткие слова в полном словаре, чем в жёстком grammar
+                self._recognizer = KaldiRecognizer(self.speech.vosk_model, self.sample_rate)
+                logger.info("Wake word recognizer создан (без grammar)")
             except Exception as e:
                 logger.error(f"Ошибка создания wake word recognizer: {e}")
 
@@ -112,14 +113,16 @@ class WakeWordDetector:
         if self._recognizer is None:
             return None
         try:
-            self._recognizer.AcceptWaveform(audio.tobytes())
-            result = json.loads(self._recognizer.FinalResult())
+            # Создаём свежий recognizer для каждой попытки, чтобы избежать
+            # накопления состояния от предыдущих шумов.
+            recognizer = KaldiRecognizer(self.speech.vosk_model, self.sample_rate)
+            recognizer.AcceptWaveform(audio.tobytes())
+            result = json.loads(recognizer.FinalResult())
             text = result.get("text", "").strip().lower()
-            if not text:
-                partial = json.loads(self._recognizer.PartialResult())
-                text = partial.get("partial", "").strip().lower()
             logger.debug(f"[Wake] Результат Vosk: '{text}'")
-            return text if text and any(w in text for w in jarvis_config.WAKE_WORDS) else None
+            if text and any(w in text for w in jarvis_config.WAKE_WORDS):
+                return text
+            return None
         except Exception as e:
             logger.exception(f"[Wake] Ошибка распознавания: {e}")
             return None
