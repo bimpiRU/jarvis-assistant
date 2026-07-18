@@ -8,6 +8,7 @@ from .commands import CommandProcessor
 from .wake_word import WakeWordDetector
 from .dangerous_action import DangerousAction
 from .jarvis_phrases import JarvisPersonality
+from .self_learning import SelfLearning
 from .config import ASSISTANT_NAME, USER_NAME
 from .logger import logger
 
@@ -20,6 +21,7 @@ class Jarvis:
         self.speech = Speech(device=mic_device)
         self.commands = CommandProcessor()
         self.commands._mic_test_callback = self.test_microphone
+        self.self_learning = SelfLearning()
         self.offline_only = offline_only
         self.use_wake_word = use_wake_word
         self.on_listen = on_listen
@@ -94,16 +96,23 @@ class Jarvis:
         if self.on_listen:
             self.on_listen("Слушаю...")
 
-        text = self.speech.listen(use_online_fallback=not self.offline_only, stop_event=stop_event)
+        text, audio = self.speech.listen(
+            use_online_fallback=not self.offline_only,
+            stop_event=stop_event,
+            return_audio=True,
+        )
 
         if not text:
             logger.info("[Listen] Текст не распознан")
+            if audio is not None:
+                self.self_learning.log_unknown_audio(audio)
             if retry < 1:
                 logger.info("[Listen] Повторная попытка распознавания")
                 self._respond("Я вас не расслышал, сэр. Повторите, пожалуйста.")
                 return self.listen_and_respond(stop_event=stop_event, retry=retry + 1)
             response = "Не удалось распознать команду, сэр."
             self._respond(response)
+            self.self_learning.log_command(text=None, success=False, response=response)
             return text, response
 
         logger.info(f"[Listen] Распознано: '{text}'")
@@ -111,9 +120,11 @@ class Jarvis:
 
         if isinstance(result, DangerousAction):
             self._handle_dangerous_action(result)
+            self.self_learning.log_command(text=text, success=True, response=result.title)
             return text, result
 
         self._respond(result)
+        self.self_learning.log_command(text=text, success=True, response=result)
         return text, result
 
     def _handle_dangerous_action(self, action):

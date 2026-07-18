@@ -318,6 +318,20 @@ class JarvisUI:
         )
         cancel_btn.pack(side=tk.LEFT, padx=5)
 
+        stats_btn = tk.Button(
+            controls,
+            text="📊 Статистика",
+            font=("Segoe UI", 9),
+            fg="#ffffff",
+            bg="#1a1a3a",
+            relief=tk.FLAT,
+            bd=0,
+            padx=12,
+            pady=6,
+            command=self._show_stats,
+        )
+        stats_btn.pack(side=tk.LEFT, padx=5)
+
         mic_test_btn = tk.Button(
             controls,
             text="🎙 Проверить микрофон",
@@ -444,6 +458,11 @@ class JarvisUI:
 
     def _cancel_pending(self):
         threading.Thread(target=self.jarvis.cancel_pending, daemon=True).start()
+
+    def _show_stats(self):
+        """Показывает статистику самообучения."""
+        stats = self.jarvis.self_learning.get_summary()
+        self._add_history("Jarvis", stats)
 
     def _test_microphone(self):
         """Запускает тест микрофона."""

@@ -22,9 +22,9 @@ class AudioCrypto:
         """Расшифровывает байты аудио."""
         return self.fernet.decrypt(token)
 
-    def secure_tempfile(self, suffix=".wav"):
+    def secure_tempfile(self, suffix=".wav", dir=None):
         """Создаёт временный файл для зашифрованного аудио."""
-        fd, path = tempfile.mkstemp(suffix=suffix + ".enc")
+        fd, path = tempfile.mkstemp(suffix=suffix + ".enc", dir=dir)
         os.close(fd)
         return path
 

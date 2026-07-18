@@ -11,6 +11,7 @@ from . import autostart
 from . import kimi_integration
 from . import extras
 from . import kaw_integration
+from . import self_learning as sl
 from .dangerous_action import DangerousAction
 from .jarvis_phrases import JarvisPersonality
 
@@ -100,6 +101,9 @@ class CommandProcessor:
 
         if any(phrase in text for phrase in ["расскажи шутку", "пошути", "анекдот", "шутка", "развесели"]):
             return JarvisPersonality.get("JOKES")
+
+        if any(phrase in text for phrase in ["статистика", "что ты выучил", "что ты знаешь", "сколько команд"]):
+            return sl.SelfLearning().get_summary()
 
         # --- Открытие сайтов ---
         if "открой youtube" in text or "youtube" in text:

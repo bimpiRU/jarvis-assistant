@@ -316,25 +316,28 @@ class Speech:
             logger.debug(f"Ошибка Google Speech: {e}")
             return None
 
-    def listen(self, use_online_fallback=True, stop_event=None):
-        """Слушает микрофон и возвращает распознанный текст."""
+    def listen(self, use_online_fallback=True, stop_event=None, return_audio=False):
+        """Слушает микрофон и возвращает распознанный текст.
+
+        Если return_audio=True, возвращает кортеж (text, audio_array).
+        """
         audio = self.microphone.record(stop_event=stop_event)
         if audio is None:
-            return None
+            return (None, None) if return_audio else None
 
         text = self._recognize_vosk(audio)
         if text:
             logger.info(f"[Vosk] Распознано: {text}")
-            return text.lower()
+            return (text.lower(), audio) if return_audio else text.lower()
 
         if use_online_fallback:
             logger.info("Vosk не распознал, пробую Google...")
             text = self._recognize_google(audio)
             if text:
                 logger.info(f"[Google] Распознано: {text}")
-                return text.lower()
+                return (text.lower(), audio) if return_audio else text.lower()
 
-        return None
+        return (None, audio) if return_audio else None
 
     def listen_for_wake(self, stop_event=None):
         """Короткое прослушивание для поиска wake word."""
