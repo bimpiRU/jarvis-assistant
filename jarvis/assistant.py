@@ -1,5 +1,7 @@
 """Главный цикл ассистента."""
 
+import threading
+import time
 from .speech import Speech
 from .commands import CommandProcessor
 from .wake_word import WakeWordDetector
@@ -11,8 +13,8 @@ from .config import ASSISTANT_NAME, USER_NAME
 class Jarvis:
     """Основной класс голосового ассистента."""
 
-    def __init__(self, on_listen=None, on_response=None, offline_only=False, use_wake_word=True):
-        self.speech = Speech()
+    def __init__(self, on_listen=None, on_response=None, offline_only=False, use_wake_word=True, mic_device=None):
+        self.speech = Speech(device=mic_device)
         self.commands = CommandProcessor()
         self.offline_only = offline_only
         self.use_wake_word = use_wake_word
@@ -20,6 +22,7 @@ class Jarvis:
         self.on_response = on_response
         self.on_dangerous_action = None
         self.on_confirmation_needed = None
+        self.on_audio_level = None
         self.wake_detector = None
 
         if use_wake_word:
@@ -42,6 +45,17 @@ class Jarvis:
         """Запускает фоновое прослушивание wake word."""
         if self.wake_detector:
             self.wake_detector.start()
+        self._start_level_monitor()
+
+    def _start_level_monitor(self):
+        """Запускает мониторинг уровня звука."""
+        def monitor():
+            while self.is_active():
+                level = self.speech.get_mic_level()
+                if self.on_audio_level:
+                    self.on_audio_level(level)
+                time.sleep(0.1)
+        threading.Thread(target=monitor, daemon=True).start()
 
     def stop_wake_word(self):
         """Останавливает прослушивание wake word."""

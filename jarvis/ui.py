@@ -1,19 +1,21 @@
 """Tkinter-интерфейс для Jarvis."""
 
 import tkinter as tk
-from tkinter import scrolledtext, messagebox
+from tkinter import scrolledtext, messagebox, ttk
 import threading
 import sys
 import winsound
 from .assistant import Jarvis
 from .dangerous_action import DangerousAction
 from .jarvis_phrases import JarvisPersonality
+from .mic_diagnostics import list_microphones, test_microphone
+from . import config as jarvis_config
 
 
 class JarvisUI:
     """Окно управления ассистентом в стиле Джарвиса."""
 
-    def __init__(self, offline_only=False, use_wake_word=True):
+    def __init__(self, offline_only=False, use_wake_word=True, mic_device=None):
         self.root = tk.Tk()
         self.root.title("Jarvis Assistant")
         self.root.geometry("750x650")
@@ -25,6 +27,7 @@ class JarvisUI:
             on_response=self._on_response,
             offline_only=offline_only,
             use_wake_word=use_wake_word,
+            mic_device=mic_device,
         )
         self.jarvis.on_dangerous_action = self._on_dangerous_action
 
@@ -79,7 +82,116 @@ class JarvisUI:
             fg="#888888",
             bg="#0a0a0a",
         )
-        self.mode_label.pack(pady=(0, 10))
+        self.mode_label.pack(pady=(0, 5))
+
+        # Индикатор уровня звука
+        level_frame = tk.Frame(self.root, bg="#0a0a0a")
+        level_frame.pack(fill=tk.X, padx=20, pady=(0, 5))
+
+        tk.Label(
+            level_frame,
+            text="Mic:",
+            font=("Consolas", 9),
+            fg="#888888",
+            bg="#0a0a0a",
+        ).pack(side=tk.LEFT, padx=(0, 5))
+
+        self.level_bar = ttk.Progressbar(
+            level_frame,
+            orient=tk.HORIZONTAL,
+            mode="determinate",
+            maximum=32768,
+            length=200,
+        )
+        self.level_bar.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        self.level_value = tk.Label(
+            level_frame,
+            text="0",
+            font=("Consolas", 9),
+            fg="#00d4ff",
+            bg="#0a0a0a",
+            width=6,
+        )
+        self.level_value.pack(side=tk.LEFT, padx=(5, 0))
+
+        # Панель настроек микрофона
+        settings_frame = tk.Frame(self.root, bg="#0a0a0a")
+        settings_frame.pack(fill=tk.X, padx=20, pady=(0, 10))
+
+        self.mic_var = tk.StringVar()
+        mics = list_microphones()
+        mic_names = [f"{m['index']}: {m['name']}" for m in mics]
+        if mic_names:
+            self.mic_var.set(mic_names[0])
+
+        tk.Label(
+            settings_frame,
+            text="Микрофон:",
+            font=("Consolas", 9),
+            fg="#888888",
+            bg="#0a0a0a",
+        ).pack(side=tk.LEFT, padx=(0, 5))
+
+        self.mic_combo = ttk.Combobox(
+            settings_frame,
+            textvariable=self.mic_var,
+            values=mic_names,
+            width=35,
+            state="readonly",
+        )
+        self.mic_combo.pack(side=tk.LEFT, padx=(0, 10))
+
+        tk.Label(
+            settings_frame,
+            text="Порог:",
+            font=("Consolas", 9),
+            fg="#888888",
+            bg="#0a0a0a",
+        ).pack(side=tk.LEFT, padx=(0, 5))
+
+        self.threshold_scale = tk.Scale(
+            settings_frame,
+            from_=10,
+            to=1000,
+            orient=tk.HORIZONTAL,
+            bg="#0a0a0a",
+            fg="#00d4ff",
+            highlightthickness=0,
+            troughcolor="#1a1a1a",
+            activebackground="#00d4ff",
+            length=120,
+            showvalue=0,
+            command=self._on_threshold_change,
+        )
+        self.threshold_scale.set(jarvis_config.ENERGY_THRESHOLD)
+        self.threshold_scale.pack(side=tk.LEFT, padx=(0, 10))
+
+        self.threshold_label = tk.Label(
+            settings_frame,
+            text=str(jarvis_config.ENERGY_THRESHOLD),
+            font=("Consolas", 9),
+            fg="#00d4ff",
+            bg="#0a0a0a",
+            width=5,
+        )
+        self.threshold_label.pack(side=tk.LEFT, padx=(0, 10))
+
+        diag_btn = tk.Button(
+            settings_frame,
+            text="Диагностика",
+            font=("Segoe UI", 8),
+            fg="#ffffff",
+            bg="#1a1a1a",
+            relief=tk.FLAT,
+            bd=0,
+            padx=8,
+            pady=3,
+            command=self._run_diagnostics,
+        )
+        diag_btn.pack(side=tk.LEFT)
+
+        self.jarvis.on_audio_level = self._on_audio_level
 
         # Кнопка микрофона
         self.mic_button = tk.Button(
@@ -208,6 +320,37 @@ class JarvisUI:
         self.root.after(0, lambda: self.status_label.config(text="Система онлайн | Ожидаю команду"))
         self.root.after(0, lambda: self._set_status_dot("#00ff88"))
 
+    def _on_audio_level(self, level):
+        """Обновляет индикатор уровня звука."""
+        self.root.after(0, lambda: self.level_bar.config(value=level))
+        self.root.after(0, lambda: self.level_value.config(text=f"{int(level)}"))
+
+    def _on_threshold_change(self, value):
+        """Изменяет порог активации микрофона."""
+        threshold = int(float(value))
+        jarvis_config.ENERGY_THRESHOLD = threshold
+        self.threshold_label.config(text=str(threshold))
+
+    def _run_diagnostics(self):
+        """Запускает диагностику микрофона."""
+        def diag():
+            device_str = self.mic_var.get()
+            device = int(device_str.split(":", 1)[0]) if device_str else None
+            result = test_microphone(duration=3, device=device)
+            if "error" in result:
+                msg = f"Ошибка: {result['error']}"
+            else:
+                msg = (
+                    f"Диагностика микрофона\n"
+                    f"RMS: {result['rms']:.1f}\n"
+                    f"Peak: {result['peak']:.1f}\n"
+                    f"Уровень: {result['db']:.1f} dB\n"
+                    f"Статус: {result['status']}"
+                )
+            self.root.after(0, lambda: messagebox.showinfo("Диагностика микрофона", msg))
+
+        threading.Thread(target=diag, daemon=True).start()
+
     def _on_dangerous_action(self, action):
         """Показывает диалог подтверждения для опасного действия."""
         self.root.after(0, lambda: self._show_confirmation_dialog(action))
@@ -288,7 +431,8 @@ def main():
     parser = argparse.ArgumentParser(description="Jarvis Assistant")
     parser.add_argument("--offline", action="store_true", help="Только офлайн-распознавание (Vosk)")
     parser.add_argument("--no-wake", action="store_true", help="Отключить активацию по слову")
+    parser.add_argument("--device", type=int, default=None, help="Индекс микрофона (sounddevice)")
     args = parser.parse_args()
 
-    app = JarvisUI(offline_only=args.offline, use_wake_word=not args.no_wake)
+    app = JarvisUI(offline_only=args.offline, use_wake_word=not args.no_wake, mic_device=args.device)
     app.run()
