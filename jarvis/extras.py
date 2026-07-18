@@ -204,6 +204,23 @@ def open_yandex_music():
         return f"Не удалось открыть Яндекс Музыку: {e}"
 
 
+def play_yandex_song(query):
+    """Ищет конкретную песню в Яндекс Музыке и открывает результаты."""
+    import urllib.parse
+    import webbrowser
+
+    if not query:
+        return open_yandex_music()
+
+    encoded = urllib.parse.quote(query)
+    url = f"https://music.yandex.ru/search?text={encoded}"
+    try:
+        webbrowser.open(url)
+        return f"Ищу в Яндекс Музыке: {query}"
+    except Exception as e:
+        return f"Не удалось открыть поиск: {e}"
+
+
 def play_music():
     """Включает музыку: ищет установленный музыкальный плеер и запускает его.
 

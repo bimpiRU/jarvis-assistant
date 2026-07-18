@@ -114,10 +114,28 @@ class CommandProcessor:
             webbrowser.open("https://www.google.com")
             return JarvisPersonality.get("SUCCESS") + " Открываю браузер."
 
+        # --- Яндекс Музыка ---
+        if "в яндекс музыке" in text or "включи в яндекс музыке" in text:
+            query = text
+            for phrase in ["в яндекс музыке", "включи в яндекс музыке", "найди в яндекс музыке", "включи"]:
+                query = query.replace(phrase, "")
+            query = query.strip()
+            if query:
+                return extras.play_yandex_song(query)
+
         if any(phrase in text for phrase in ["яндекс музыку", "яндекс музыка"]):
             return extras.open_yandex_music()
 
-        if any(phrase in text for phrase in ["включи музыку", "вруби музыку", "музыку", "включи песню"]):
+        if text.startswith("включи песню") or text.startswith("вруби песню") or text.startswith("найди песню"):
+            query = text
+            for phrase in ["включи песню", "вруби песню", "найди песню"]:
+                query = query.replace(phrase, "")
+            query = query.strip()
+            if query:
+                return extras.play_yandex_song(query)
+            return "Какую песню включить, сэр?"
+
+        if any(phrase in text for phrase in ["включи музыку", "вруби музыку", "музыку", "вруби музон"]):
             return extras.play_music()
 
         if any(phrase in text for phrase in ["найди", "загугли", "поищи"]):
